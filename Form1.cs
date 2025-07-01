@@ -48,7 +48,8 @@ namespace MyExpenseTracker
             using (var conn = new SQLiteConnection(ConnectionString))
             {
                 conn.Open();
-                string sql = @"CREATE TABLE IF NOT EXISTS Expenses (
+                // Expenses table
+                string sqlExpenses = @"CREATE TABLE IF NOT EXISTS Expenses (
                                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                                 Type TEXT,
                                 Category TEXT,
@@ -56,7 +57,18 @@ namespace MyExpenseTracker
                                 Date TEXT,
                                 Notes TEXT
                             )";
-                using (var cmd = new SQLiteCommand(sql, conn))
+                using (var cmd = new SQLiteCommand(sqlExpenses, conn))
+                {
+                    cmd.ExecuteNonQuery();
+                }
+
+                // WeeklyBudget table
+                string sqlBudget = @"CREATE TABLE IF NOT EXISTS WeeklyBudget (
+                                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                WeekStart TEXT UNIQUE,
+                                Amount REAL
+                            )";
+                using (var cmd = new SQLiteCommand(sqlBudget, conn))
                 {
                     cmd.ExecuteNonQuery();
                 }
@@ -65,6 +77,28 @@ namespace MyExpenseTracker
 
         private void Button1_Click(object sender, EventArgs e)
         {
+            // Check if weekly budget is set for this week
+            DateTime today = DateTime.Today;
+            int diff = (7 + (today.DayOfWeek - DayOfWeek.Monday)) % 7;
+            DateTime monday = today.AddDays(-1 * diff);
+            bool hasBudget = false;
+            using (var conn = new SQLiteConnection(ConnectionString))
+            {
+                conn.Open();
+                string sql = "SELECT COUNT(1) FROM WeeklyBudget WHERE WeekStart = @WeekStart";
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    var result = cmd.ExecuteScalar();
+                    hasBudget = (result != null && Convert.ToInt32(result) > 0);
+                }
+            }
+            if (!hasBudget)
+            {
+                MessageBox.Show("Please enter 'Money for this week' before adding expenses.", "Weekly Budget Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             // Validate amount
             if (!decimal.TryParse(textBox1.Text, out decimal amount) || amount < 0)
             {
@@ -112,7 +146,39 @@ namespace MyExpenseTracker
 
             UpdateTotalExpenses();
             UpdateRecentExpenses();
-            UpdateWeeklyExpenses(); // <-- Add this line
+            UpdateWeeklyExpenses();
+
+            // Update the difference in label18 after adding the expense
+            decimal weeklyBudgetValue = 0;
+            using (var conn = new SQLiteConnection(ConnectionString))
+            {
+                conn.Open();
+                string sql = "SELECT Amount FROM WeeklyBudget WHERE WeekStart = @WeekStart";
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    var result = cmd.ExecuteScalar();
+                    if (result != DBNull.Value && result != null)
+                        weeklyBudgetValue = Convert.ToDecimal(result);
+                }
+            }
+            decimal totalExpenseThisWeek = 0;
+            DateTime sunday = monday.AddDays(6);
+            using (var conn = new SQLiteConnection(ConnectionString))
+            {
+                conn.Open();
+                string sql = "SELECT SUM(Amount) FROM Expenses WHERE Date >= @Monday AND Date <= @Sunday";
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@Monday", monday.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@Sunday", sunday.ToString("yyyy-MM-dd"));
+                    var result = cmd.ExecuteScalar();
+                    if (result != DBNull.Value && result != null)
+                        totalExpenseThisWeek = Convert.ToDecimal(result);
+                }
+            }
+            label18.Text = (weeklyBudgetValue - totalExpenseThisWeek).ToString("C");
+
             MessageBox.Show("Expense added successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
             ClearForm();
         }
@@ -215,37 +281,33 @@ namespace MyExpenseTracker
 
         private void LoadWeeklyBudget()
         {
-            // Get the current week's Monday and Sunday
             DateTime today = DateTime.Today;
             int diff = (7 + (today.DayOfWeek - DayOfWeek.Monday)) % 7;
             DateTime monday = today.AddDays(-1 * diff);
-            DateTime sunday = monday.AddDays(6);
 
-            // Try to load the budget for this week from a local file
-            string budgetFile = "weeklybudget.txt";
-            if (System.IO.File.Exists(budgetFile))
+            using (var conn = new SQLiteConnection(ConnectionString))
             {
-                string[] lines = System.IO.File.ReadAllLines(budgetFile);
-                foreach (var line in lines)
+                conn.Open();
+                string sql = "SELECT Amount FROM WeeklyBudget WHERE WeekStart = @WeekStart";
+                using (var cmd = new SQLiteCommand(sql, conn))
                 {
-                    // Format: yyyy-MM-dd|budget
-                    var parts = line.Split('|');
-                    if (parts.Length == 2 && DateTime.TryParse(parts[0], out DateTime weekStart))
+                    cmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    var result = cmd.ExecuteScalar();
+                    if (result != DBNull.Value && result != null)
                     {
-                        if (weekStart == monday)
-                        {
-                            if (decimal.TryParse(parts[1], out decimal budget))
-                            {
-                                weeklyBudget = budget;
-                                label16.Text = weeklyBudget.ToString("C");
-                                // Calculate and display the difference
-                                decimal totalExpenseThisWeek = 0;
-                                string label14Value = label14.Text.Replace(System.Globalization.CultureInfo.CurrentCulture.NumberFormat.CurrencySymbol, "").Trim();
-                                decimal.TryParse(label14Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.CurrentCulture, out totalExpenseThisWeek);
-                                label18.Text = (weeklyBudget - totalExpenseThisWeek).ToString("C");
-                                break;
-                            }
-                        }
+                        weeklyBudget = Convert.ToDecimal(result);
+                        label16.Text = weeklyBudget.ToString("C");
+                        // Calculate and display the difference
+                        decimal totalExpenseThisWeek = 0;
+                        string label14Value = label14.Text.Replace(System.Globalization.CultureInfo.CurrentCulture.NumberFormat.CurrencySymbol, "").Trim();
+                        decimal.TryParse(label14Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.CurrentCulture, out totalExpenseThisWeek);
+                        label18.Text = (weeklyBudget - totalExpenseThisWeek).ToString("C");
+                    }
+                    else
+                    {
+                        weeklyBudget = 0;
+                        label16.Text = string.Empty;
+                        label18.Text = string.Empty;
                     }
                 }
             }
@@ -356,33 +418,53 @@ namespace MyExpenseTracker
                 return;
             }
 
-            // Save the budget for this week in a local file
             DateTime today = DateTime.Today;
             int diff = (7 + (today.DayOfWeek - DayOfWeek.Monday)) % 7;
             DateTime monday = today.AddDays(-1 * diff);
-            string budgetFile = "weeklybudget.txt";
-            string newLine = $"{monday:yyyy-MM-dd}|{moneyThisWeek}";
 
-            // Remove any previous entry for this week
-            var lines = System.IO.File.Exists(budgetFile) ? System.IO.File.ReadAllLines(budgetFile).ToList() : new System.Collections.Generic.List<string>();
-            lines.RemoveAll(l => l.StartsWith(monday.ToString("yyyy-MM-dd") + "|"));
-            lines.Add(newLine);
-            System.IO.File.WriteAllLines(budgetFile, lines);
+            // Save/update the budget for this week in the WeeklyBudget table
+            using (var conn = new SQLiteConnection(ConnectionString))
+            {
+                conn.Open();
+                // Upsert logic: delete then insert
+                string deleteSql = "DELETE FROM WeeklyBudget WHERE WeekStart = @WeekStart";
+                using (var deleteCmd = new SQLiteCommand(deleteSql, conn))
+                {
+                    deleteCmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    deleteCmd.ExecuteNonQuery();
+                }
+                string insertSql = "INSERT INTO WeeklyBudget (WeekStart, Amount) VALUES (@WeekStart, @Amount)";
+                using (var insertCmd = new SQLiteCommand(insertSql, conn))
+                {
+                    insertCmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    insertCmd.Parameters.AddWithValue("@Amount", moneyThisWeek);
+                    insertCmd.ExecuteNonQuery();
+                }
+            }
 
             // Display the value in label16
             label16.Text = moneyThisWeek.ToString("C");
 
-            // Get the value from label14 (Total Expense This Week)
+            // Get the value from label14 (Total Expense This Week), but exclude "Weekly Budget" from the sum
             decimal totalExpenseThisWeek = 0;
-            string label14Value = label14.Text.Replace(System.Globalization.CultureInfo.CurrentCulture.NumberFormat.CurrencySymbol, "").Trim();
-            decimal.TryParse(label14Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.CurrentCulture, out totalExpenseThisWeek);
+            DateTime sunday = monday.AddDays(6);
+            using (var conn = new SQLiteConnection(ConnectionString))
+            {
+                conn.Open();
+                string sql = "SELECT SUM(Amount) FROM Expenses WHERE Date >= @Monday AND Date <= @Sunday AND Type != 'Weekly Budget'";
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@Monday", monday.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@Sunday", sunday.ToString("yyyy-MM-dd"));
+                    var result = cmd.ExecuteScalar();
+                    if (result != DBNull.Value && result != null)
+                        totalExpenseThisWeek = Convert.ToDecimal(result);
+                }
+            }
 
             // Subtract total expenses from money this week and display in label18
             decimal difference = moneyThisWeek - totalExpenseThisWeek;
             label18.Text = difference.ToString("C");
-
-            // Do NOT add the weekly budget to the Expenses table
-            // Only update the UI as above
         }
 
         private void button1_Click_1(object sender, EventArgs e)
@@ -397,25 +479,95 @@ namespace MyExpenseTracker
 
         private void button5_Click(object sender, EventArgs e)
         {
-            // Clear label16
+            // Clear label16 and label18
             label16.Text = string.Empty;
-
-            // Also clear the difference in label18
             label18.Text = string.Empty;
 
-            // Remove the weekly budget for this week from the local file
+            // Remove the weekly budget for this week from the WeeklyBudget table
             DateTime today = DateTime.Today;
             int diff = (7 + (today.DayOfWeek - DayOfWeek.Monday)) % 7;
             DateTime monday = today.AddDays(-1 * diff);
-            string budgetFile = "weeklybudget.txt";
 
-            if (System.IO.File.Exists(budgetFile))
+            using (var conn = new SQLiteConnection(ConnectionString))
             {
-                var lines = System.IO.File.ReadAllLines(budgetFile).ToList();
-                lines.RemoveAll(l => l.StartsWith(monday.ToString("yyyy-MM-dd") + "|"));
-                System.IO.File.WriteAllLines(budgetFile, lines);
+                conn.Open();
+                string deleteSql = "DELETE FROM WeeklyBudget WHERE WeekStart = @WeekStart";
+                using (var deleteCmd = new SQLiteCommand(deleteSql, conn))
+                {
+                    deleteCmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    deleteCmd.ExecuteNonQuery();
+                }
             }
+        }
 
+        private void backUpToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                // Prompt user for backup location
+                using (SaveFileDialog saveFileDialog = new SaveFileDialog())
+                {
+                    saveFileDialog.Filter = "SQLite Database (*.db)|*.db|All files (*.*)|*.*";
+                    saveFileDialog.Title = "Backup Expense Database";
+                    saveFileDialog.FileName = $"expenses_backup_{DateTime.Now:yyyyMMdd_HHmmss}.db";
+
+                    if (saveFileDialog.ShowDialog() == DialogResult.OK)
+                    {
+                        string backupPath = saveFileDialog.FileName;
+                        // Ensure all data is flushed to disk before copying
+                        using (var conn = new System.Data.SQLite.SQLiteConnection(ConnectionString))
+                        {
+                            conn.Open();
+                            using (var cmd = new System.Data.SQLite.SQLiteCommand("VACUUM;", conn))
+                            {
+                                cmd.ExecuteNonQuery();
+                            }
+                        }
+                        System.IO.File.Copy(DbFile, backupPath, true);
+                        MessageBox.Show("Database backup completed successfully.", "Backup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Backup failed: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void restoreToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            try
+    {
+        using (OpenFileDialog openFileDialog = new OpenFileDialog())
+        {
+            openFileDialog.Filter = "SQLite Database (*.db)|*.db|All files (*.*)|*.*";
+            openFileDialog.Title = "Restore Expense Database";
+
+            if (openFileDialog.ShowDialog() == DialogResult.OK)
+            {
+                string selectedFile = openFileDialog.FileName;
+
+                // Close any open connections before restoring
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+
+                // Overwrite the current database with the selected backup
+                System.IO.File.Copy(selectedFile, DbFile, true);
+
+                // Reload data from the restored database
+                UpdateTotalExpenses();
+                UpdateRecentExpenses();
+                UpdateWeeklyExpenses();
+                LoadWeeklyBudget();
+
+                MessageBox.Show("Database restored successfully.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show("Restore failed: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
         }
     }
 }
