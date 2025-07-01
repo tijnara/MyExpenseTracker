@@ -65,7 +65,7 @@ namespace MyExpenseTracker
                 // WeeklyBudget table
                 string sqlBudget = @"CREATE TABLE IF NOT EXISTS WeeklyBudget (
                                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                WeekStart TEXT UNIQUE,
+                                SetDate TEXT UNIQUE,
                                 Amount REAL
                             )";
                 using (var cmd = new SQLiteCommand(sqlBudget, conn))
@@ -85,10 +85,10 @@ namespace MyExpenseTracker
             using (var conn = new SQLiteConnection(ConnectionString))
             {
                 conn.Open();
-                string sql = "SELECT COUNT(1) FROM WeeklyBudget WHERE WeekStart = @WeekStart";
+                string sql = "SELECT COUNT(1) FROM WeeklyBudget WHERE SetDate = @SetDate";
                 using (var cmd = new SQLiteCommand(sql, conn))
                 {
-                    cmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@SetDate", monday.ToString("yyyy-MM-dd"));
                     var result = cmd.ExecuteScalar();
                     hasBudget = (result != null && Convert.ToInt32(result) > 0);
                 }
@@ -153,10 +153,10 @@ namespace MyExpenseTracker
             using (var conn = new SQLiteConnection(ConnectionString))
             {
                 conn.Open();
-                string sql = "SELECT Amount FROM WeeklyBudget WHERE WeekStart = @WeekStart";
+                string sql = "SELECT Amount FROM WeeklyBudget WHERE SetDate = @SetDate";
                 using (var cmd = new SQLiteCommand(sql, conn))
                 {
-                    cmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@SetDate", monday.ToString("yyyy-MM-dd"));
                     var result = cmd.ExecuteScalar();
                     if (result != DBNull.Value && result != null)
                         weeklyBudgetValue = Convert.ToDecimal(result);
@@ -288,10 +288,10 @@ namespace MyExpenseTracker
             using (var conn = new SQLiteConnection(ConnectionString))
             {
                 conn.Open();
-                string sql = "SELECT Amount FROM WeeklyBudget WHERE WeekStart = @WeekStart";
+                string sql = "SELECT Amount FROM WeeklyBudget WHERE SetDate = @SetDate";
                 using (var cmd = new SQLiteCommand(sql, conn))
                 {
-                    cmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@SetDate", monday.ToString("yyyy-MM-dd"));
                     var result = cmd.ExecuteScalar();
                     if (result != DBNull.Value && result != null)
                     {
@@ -410,62 +410,7 @@ namespace MyExpenseTracker
 
         }
 
-        private void button4_Click_1(object sender, EventArgs e)
-        {
-            if (!decimal.TryParse(textBox4.Text, out decimal moneyThisWeek))
-            {
-                MessageBox.Show("Please enter a valid number for Money This Week.", "Invalid Input", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            DateTime today = DateTime.Today;
-            int diff = (7 + (today.DayOfWeek - DayOfWeek.Monday)) % 7;
-            DateTime monday = today.AddDays(-1 * diff);
-
-            // Save/update the budget for this week in the WeeklyBudget table
-            using (var conn = new SQLiteConnection(ConnectionString))
-            {
-                conn.Open();
-                // Upsert logic: delete then insert
-                string deleteSql = "DELETE FROM WeeklyBudget WHERE WeekStart = @WeekStart";
-                using (var deleteCmd = new SQLiteCommand(deleteSql, conn))
-                {
-                    deleteCmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
-                    deleteCmd.ExecuteNonQuery();
-                }
-                string insertSql = "INSERT INTO WeeklyBudget (WeekStart, Amount) VALUES (@WeekStart, @Amount)";
-                using (var insertCmd = new SQLiteCommand(insertSql, conn))
-                {
-                    insertCmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
-                    insertCmd.Parameters.AddWithValue("@Amount", moneyThisWeek);
-                    insertCmd.ExecuteNonQuery();
-                }
-            }
-
-            // Display the value in label16
-            label16.Text = moneyThisWeek.ToString("C");
-
-            // Get the value from label14 (Total Expense This Week), but exclude "Weekly Budget" from the sum
-            decimal totalExpenseThisWeek = 0;
-            DateTime sunday = monday.AddDays(6);
-            using (var conn = new SQLiteConnection(ConnectionString))
-            {
-                conn.Open();
-                string sql = "SELECT SUM(Amount) FROM Expenses WHERE Date >= @Monday AND Date <= @Sunday AND Type != 'Weekly Budget'";
-                using (var cmd = new SQLiteCommand(sql, conn))
-                {
-                    cmd.Parameters.AddWithValue("@Monday", monday.ToString("yyyy-MM-dd"));
-                    cmd.Parameters.AddWithValue("@Sunday", sunday.ToString("yyyy-MM-dd"));
-                    var result = cmd.ExecuteScalar();
-                    if (result != DBNull.Value && result != null)
-                        totalExpenseThisWeek = Convert.ToDecimal(result);
-                }
-            }
-
-            // Subtract total expenses from money this week and display in label18
-            decimal difference = moneyThisWeek - totalExpenseThisWeek;
-            label18.Text = difference.ToString("C");
-        }
+        
 
         private void button1_Click_1(object sender, EventArgs e)
         {
@@ -491,10 +436,10 @@ namespace MyExpenseTracker
             using (var conn = new SQLiteConnection(ConnectionString))
             {
                 conn.Open();
-                string deleteSql = "DELETE FROM WeeklyBudget WHERE WeekStart = @WeekStart";
+                string deleteSql = "DELETE FROM WeeklyBudget WHERE SetDate = @SetDate";
                 using (var deleteCmd = new SQLiteCommand(deleteSql, conn))
                 {
-                    deleteCmd.Parameters.AddWithValue("@WeekStart", monday.ToString("yyyy-MM-dd"));
+                    deleteCmd.Parameters.AddWithValue("@SetDate", monday.ToString("yyyy-MM-dd"));
                     deleteCmd.ExecuteNonQuery();
                 }
             }
@@ -537,37 +482,44 @@ namespace MyExpenseTracker
         private void restoreToolStripMenuItem_Click(object sender, EventArgs e)
         {
             try
-    {
-        using (OpenFileDialog openFileDialog = new OpenFileDialog())
-        {
-            openFileDialog.Filter = "SQLite Database (*.db)|*.db|All files (*.*)|*.*";
-            openFileDialog.Title = "Restore Expense Database";
-
-            if (openFileDialog.ShowDialog() == DialogResult.OK)
             {
-                string selectedFile = openFileDialog.FileName;
+                using (OpenFileDialog openFileDialog = new OpenFileDialog())
+                {
+                    openFileDialog.Filter = "SQLite Database (*.db)|*.db|All files (*.*)|*.*";
+                    openFileDialog.Title = "Restore Expense Database";
 
-                // Close any open connections before restoring
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+                    if (openFileDialog.ShowDialog() == DialogResult.OK)
+                    {
+                        string selectedFile = openFileDialog.FileName;
 
-                // Overwrite the current database with the selected backup
-                System.IO.File.Copy(selectedFile, DbFile, true);
+                        // Close any open connections before restoring
+                        GC.Collect();
+                        GC.WaitForPendingFinalizers();
 
-                // Reload data from the restored database
-                UpdateTotalExpenses();
-                UpdateRecentExpenses();
-                UpdateWeeklyExpenses();
-                LoadWeeklyBudget();
+                        // Overwrite the current database with the selected backup
+                        System.IO.File.Copy(selectedFile, DbFile, true);
 
-                MessageBox.Show("Database restored successfully.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        // Reload data from the restored database
+                        UpdateTotalExpenses();
+                        UpdateRecentExpenses();
+                        UpdateWeeklyExpenses();
+                        LoadWeeklyBudget();
+
+                        MessageBox.Show("Database restored successfully.", "Restore", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Restore failed: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-    }
-    catch (Exception ex)
-    {
-        MessageBox.Show("Restore failed: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-    }
+
+        // Add this public method to Form1
+        public void SetWeeklyLabels(decimal value)
+        {
+            label16.Text = value.ToString("C");
+            label18.Text = value.ToString("C");
         }
     }
 }
